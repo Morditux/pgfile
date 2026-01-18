@@ -1,13 +1,13 @@
 # pgfile
 
-`pgfile` est une bibliothèque Go permettant de stocker des fichiers dans une base de données PostgreSQL en utilisant `pgx`.
+`pgfile` is a Go library for storing files in a PostgreSQL database using `pgx`.
 
-## Caractéristiques
+## Features
 
-- **Chunking** : Les fichiers sont découpés en morceaux de 4 ko (4096 octets) et stockés dans un champ `bytea`.
-- **Habilitation** : Gestion des accès basée sur des UUID de groupe et d'utilisateur.
-- **Métadonnées** : Stockage du nom, du chemin, et des dates de création/modification.
-- **Performance** : Utilise `pgxpool` pour une gestion efficace des connexions.
+- **Chunking**: Files are split into 4KB (4096 bytes) chunks and stored in a `bytea` field.
+- **Habilitation**: Access management based on User and Group UUIDs.
+- **Metadata**: Stores name, path, creation date, and modification date.
+- **Performance**: Uses `pgxpool` for efficient connection management.
 
 ## Installation
 
@@ -15,9 +15,9 @@
 go get github.com/Morditux/pgfile
 ```
 
-## Schéma de Base de Données
+## Database Schema
 
-Vous devez initialiser votre base de données avec le schéma suivant :
+You need to initialize your database with the following schema:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -40,28 +40,28 @@ CREATE TABLE file_chunks (
 );
 ```
 
-## Utilisation
+## Usage
 
-### Initialisation
+### Initialization
 
 ```go
 pool, err := pgxpool.New(context.Background(), connString)
 storage := pgfile.NewStorage(pool)
 ```
 
-### Upload d'un fichier
+### Uploading a file
 
 ```go
 file, err := os.Open("image.png")
 meta, err := storage.Upload(ctx, "image.png", "/photos/2026", groupID, userID, file)
 ```
 
-### Téléchargement d'un fichier
+### Downloading a file
 
 ```go
 err := storage.Download(ctx, fileID, userID, groupID, outWriter)
 ```
 
-## Licence
+## License
 
 MIT
