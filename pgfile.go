@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const ChunkSize = 4096 // 4KB
+const ChunkSize = 1024 * 1024 // 1MB
 
 type FileMetadata struct {
 	ID        uuid.UUID
@@ -31,7 +31,7 @@ func NewStorage(pool *pgxpool.Pool) *Storage {
 	return &Storage{pool: pool}
 }
 
-// Upload stores a file in PostgreSQL, chunking it into 4KB pieces.
+// Upload stores a file in PostgreSQL, chunking it into 1MB pieces.
 func (s *Storage) Upload(ctx context.Context, name, path string, groupID, userID uuid.UUID, r io.Reader) (*FileMetadata, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -50,26 +50,21 @@ func (s *Storage) Upload(ctx context.Context, name, path string, groupID, userID
 		return nil, fmt.Errorf("failed to insert file metadata: %w", err)
 	}
 
-	buffer := make([]byte, ChunkSize)
-	sequence := 0
-	for {
-		n, err := r.Read(buffer)
-		if n > 0 {
-			_, err = tx.Exec(ctx, `
-				INSERT INTO file_chunks (file_id, sequence, data)
-				VALUES ($1, $2, $3)`,
-				fileID, sequence, buffer[:n])
-			if err != nil {
-				return nil, fmt.Errorf("failed to insert chunk %d: %w", sequence, err)
-			}
-			sequence++
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to read file: %w", err)
-		}
+	src := &ReaderSource{
+		Reader:   r,
+		Buffer:   make([]byte, ChunkSize),
+		FileID:   fileID,
+		Sequence: 0,
+	}
+
+	_, err = tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"file_chunks"},
+		[]string{"file_id", "sequence", "data"},
+		src,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to copy file chunks: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -85,6 +80,43 @@ func (s *Storage) Upload(ctx context.Context, name, path string, groupID, userID
 		CreatedAt: now,
 		UpdatedAt: now,
 	}, nil
+}
+
+// ReaderSource implements pgx.CopyFromSource to stream data from an io.Reader
+type ReaderSource struct {
+	Reader   io.Reader
+	Buffer   []byte
+	FileID   uuid.UUID
+	Sequence int
+
+	lastRead int
+	err      error
+}
+
+func (rs *ReaderSource) Next() bool {
+	if rs.err != nil {
+		return false
+	}
+	rs.lastRead, rs.err = rs.Reader.Read(rs.Buffer)
+	return rs.lastRead > 0
+}
+
+func (rs *ReaderSource) Values() ([]any, error) {
+	// Zero-copy: return the slice of the buffer directly.
+	// pgx.CopyFrom encodes the values before calling Next(), so this is safe.
+	chunk := rs.Buffer[:rs.lastRead]
+
+	values := []any{rs.FileID, rs.Sequence, chunk}
+	rs.Sequence++
+
+	return values, nil
+}
+
+func (rs *ReaderSource) Err() error {
+	if rs.err == io.EOF {
+		return nil
+	}
+	return rs.err
 }
 
 // Download retrieves a file from PostgreSQL and writes it to the provided io.Writer.
@@ -111,9 +143,21 @@ func (s *Storage) Download(ctx context.Context, fileID, seekerID uuid.UUID, seek
 
 	for rows.Next() {
 		var data []byte
-		if err := rows.Scan(&data); err != nil {
-			return fmt.Errorf("failed to scan chunk: %w", err)
+
+		// Optimization: Use RawValues for zero-copy if the format is binary.
+		// Format code 1 is Binary.
+		if len(rows.FieldDescriptions()) > 0 && rows.FieldDescriptions()[0].Format == 1 {
+			raw := rows.RawValues()
+			if len(raw) > 0 {
+				data = raw[0]
+			}
+		} else {
+			// Fallback to Scan (allocates)
+			if err := rows.Scan(&data); err != nil {
+				return fmt.Errorf("failed to scan chunk: %w", err)
+			}
 		}
+
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("failed to write chunk to destination: %w", err)
 		}

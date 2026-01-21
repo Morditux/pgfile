@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS file_chunks (
     file_id UUID REFERENCES files(id) ON DELETE CASCADE,
     sequence INT NOT NULL,
-    data BYTEA NOT NULL,
+    data BYTEA NOT NULL COMPRESS WITH lz4,
     PRIMARY KEY (file_id, sequence)
 );
 

@@ -4,10 +4,13 @@
 
 ## Features
 
-- **Chunking**: Files are split into 4KB (4096 bytes) chunks and stored in a `bytea` field.
+- **Chunking**: Files are split into 1MB chunks and stored in a `bytea` field.
 - **Habilitation**: Access management based on User and Group UUIDs.
 - **Metadata**: Stores name, path, creation date, and modification date.
-- **Performance**: Uses `pgxpool` for efficient connection management.
+- **Performance**:
+  - Uses `pgxpool` for efficient connection management.
+  - **Zero-copy Upload**: Buffers are reused to minimize memory allocations.
+  - **Zero-copy Download**: Reads directly from network buffers when possible (binary protocol).
 
 ## Installation
 
