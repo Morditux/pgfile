@@ -4,13 +4,14 @@
 
 ## Features
 
-- **Chunking**: Files are split into 1MB chunks and stored in a `bytea` field.
-- **Habilitation**: Access management based on User and Group UUIDs.
-- **Metadata**: Stores name, path, creation date, and modification date.
-- **Performance**:
+- **Chunked Storage**: Files are split into 1MB chunks and stored in a `bytea` field for efficient handling of large files.
+- **Permission Model**: Built-in access control based on owner and group UUIDs.
+- **Metadata Management**: Stores file name, virtual path, creation and modification timestamps.
+- **High Performance**:
   - Uses `pgxpool` for efficient connection management.
-  - **Zero-copy Upload**: Buffers are reused to minimize memory allocations.
-  - **Zero-copy Download**: Reads directly from network buffers when possible (binary protocol).
+  - **Zero-copy Upload**: Streaming uploads with buffer reuse to minimize memory allocations.
+  - **Zero-copy Download**: Reads directly from network buffers when using binary protocol.
+- **Thread-Safe**: All operations are safe for concurrent use.
 
 ## Installation
 
@@ -20,7 +21,7 @@ go get github.com/Morditux/pgfile
 
 ## Database Schema
 
-You need to initialize your database with the following schema:
+Initialize your database with the schema in `schema.sql`:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -41,29 +42,74 @@ CREATE TABLE file_chunks (
     data BYTEA NOT NULL,
     PRIMARY KEY (file_id, sequence)
 );
+
+CREATE INDEX idx_files_path ON files(path);
+CREATE INDEX idx_files_habilitation ON files(group_id, owner_id);
 ```
 
-## Usage
+## API
 
-### Initialization
+### Storage
+
+The main entry point is the `Storage` type:
 
 ```go
 pool, err := pgxpool.New(context.Background(), connString)
 storage := pgfile.NewStorage(pool)
 ```
 
-### Uploading a file
+### Upload
+
+Store a file from any `io.Reader`:
 
 ```go
-file, err := os.Open("image.png")
-meta, err := storage.Upload(ctx, "image.png", "/photos/2026", groupID, userID, file)
+file, err := os.Open("document.pdf")
+defer file.Close()
+
+meta, err := storage.Upload(ctx, "document.pdf", "/docs/2026", groupID, userID, file)
+// meta.ID contains the new file's UUID
 ```
 
-### Downloading a file
+### Download
+
+Retrieve a file to any `io.Writer` (permission check included):
 
 ```go
-err := storage.Download(ctx, fileID, userID, groupID, outWriter)
+var buf bytes.Buffer
+err := storage.Download(ctx, fileID, seekerUserID, seekerGroupID, &buf)
 ```
+
+### GetMetadata
+
+Retrieve file metadata:
+
+```go
+meta, err := storage.GetMetadata(ctx, fileID, seekerUserID, seekerGroupID)
+fmt.Printf("File: %s, Size: created at %s\n", meta.Name, meta.CreatedAt)
+```
+
+### ListByPath
+
+List all accessible files in a virtual directory:
+
+```go
+files, err := storage.ListByPath(ctx, "/docs/2026", seekerUserID, seekerGroupID)
+for _, f := range files {
+    fmt.Printf("- %s\n", f.Name)
+}
+```
+
+### Delete
+
+Remove a file and all its chunks (permission check included):
+
+```go
+err := storage.Delete(ctx, fileID, seekerUserID, seekerGroupID)
+```
+
+## Documentation
+
+See the package documentation with `go doc github.com/Morditux/pgfile` or read `doc.go`.
 
 ## License
 
